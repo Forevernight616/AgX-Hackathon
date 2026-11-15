@@ -5,10 +5,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import httpx
-from agents import deliberate, OLLAMA_URL, MODEL, MEMORY
+from agents import deliberate, OLLAMA_URL, MEMORY
+import threading
+import llm_agent
+MODEL = llm_agent.MODEL
 
-app = FastAPI(title='FieldOps Multi-Agent API', version='0.5.0')
-AI_MODE = os.getenv('AI_MODE', 'mock').lower()
+app = FastAPI(title='FieldOps Explainer Agent API', version='0.6.0')
+# 'ollama' = Explainer uses the local LLM (falls back to templates if it is down); 'mock' = templates only.
+AI_MODE = os.getenv('AI_MODE', 'ollama').lower()
 origins = [x.strip() for x in os.getenv('FRONTEND_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173').split(',') if x.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=['GET', 'POST'], allow_headers=['Content-Type'])
 
@@ -38,3 +42,31 @@ async def agent_deliberate(request: DeliberationRequest):
 @app.get('/api/agents/memory')
 def memory():
     return {k: v[-20:] for k, v in MEMORY.items()}
+
+
+# ── Explainer Agent (LLM only talks; decisions come from the deterministic agents in the simulator) ──
+class ExplainRequest(BaseModel):
+    diff: dict
+    template: str = Field(max_length=4000)
+
+class WhyRequest(BaseModel):
+    question: str = Field(max_length=500)
+    facts: dict
+    template: str = Field(max_length=4000)
+
+def _template(template):
+    return {'text': template, 'source': 'template', 'model': None}
+
+@app.on_event('startup')
+def _warmup():
+    if AI_MODE == 'ollama':
+        threading.Thread(target=llm_agent.warmup, daemon=True).start()
+
+# Plain `def` endpoints run in FastAPI's threadpool, so slow LLM calls never block the server.
+@app.post('/api/explain')
+def explain(request: ExplainRequest):
+    return llm_agent.explain_replan(request.diff, request.template) if AI_MODE == 'ollama' else _template(request.template)
+
+@app.post('/api/why')
+def why(request: WhyRequest):
+    return llm_agent.answer_why(request.question, request.facts, request.template) if AI_MODE == 'ollama' else _template(request.template)

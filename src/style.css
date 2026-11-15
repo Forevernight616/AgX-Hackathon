@@ -33,3 +33,40 @@
 .battery-percentage{min-width:30px;text-align:right}
 .tractor-battery.medium{color:#e8bd70}
 .tractor-battery.low{color:#f08a7f}
+
+/* ── AI Farm Orchestrator: agent cards, explanation, message feed ── */
+.plan-chip{font-size:11px;letter-spacing:.06em;color:#0f1f1f !important;background:#9cd8cf;border-radius:4px;padding:2px 8px;margin-right:0 !important}
+.agent-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;margin-top:10px}
+.agent-card{border:1px solid #344c4b;border-left:3px solid #9cd8cf;background:#1c3032;border-radius:6px;padding:8px 10px;font-size:11.5px;min-width:0}
+.agent-card-head{display:flex;justify-content:space-between;align-items:center}
+.agent-card-head strong{color:#d8f1ec;font-size:12.5px}.agent-card-head span{font-size:11px;color:#8fb0ad}
+.agent-card small{color:#8fb0ad;display:block;margin-top:2px}
+.agent-card p{margin:6px 0 0;line-height:1.4;color:#c6dbd8;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.agent-orchestrator{border-left-color:#80adff}.agent-fleet{border-left-color:#66d6b0}.agent-navigation{border-left-color:#e7ba72}
+.agent-safety{border-left-color:#e78c79}.agent-agronomy{border-left-color:#a6c86b}.agent-explainer{border-left-color:#c59cf0}
+.orchestrator-body{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);gap:10px;margin-top:10px}
+@media (max-width:900px){.orchestrator-body{grid-template-columns:1fr}}
+.explain-box,.agent-feed{border:1px solid #344c4b;background:#1c3032;border-radius:7px;padding:10px;font-size:12px;min-width:0}
+.explain-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.explain-head strong{font-size:11px;letter-spacing:.1em;color:#9cd8cf}.explain-head span{font-size:11px;color:#8fb0ad}
+.explain-box p{line-height:1.55;margin:4px 0;white-space:pre-wrap}.explain-box b{color:#9cd8cf}
+.explain-box details{margin-top:6px;color:#b5cac8}.explain-box summary{cursor:pointer;font-size:11px}
+.source-badge{font-style:normal;font-size:10px;letter-spacing:.05em;border-radius:3px;padding:1px 6px;background:#344c4b;color:#d8e8e6 !important}
+.source-badge.llm{background:#5b3f86;color:#f0e3ff !important}
+.agent-feed{max-height:210px;overflow-y:auto}
+.feed-row{display:flex;gap:6px;align-items:baseline;padding:3px 0;border-bottom:1px solid #23393a;font-size:11.5px}
+.feed-route{color:#b9d3d0;white-space:nowrap}.feed-detail{color:#d0e2df;min-width:0;overflow-wrap:anywhere}
+.kind-badge{font-size:9.5px;letter-spacing:.05em;border-radius:3px;padding:1px 5px;background:#2d4544;color:#cfe5e1;white-space:nowrap}
+.kind-veto,.kind-escalate{background:#7a3532;color:#ffd9d3}.kind-approve,.kind-refueled,.kind-completed{background:#2f6a52;color:#d6fbe9}
+.kind-explanation{background:#5b3f86;color:#f0e3ff}.kind-handoff,.kind-hold{background:#7a5c25;color:#ffeccb}
+.kind-refuel,.kind-route,.kind-reroute{background:#6b5a2a;color:#fff0cf}.kind-award{background:#2b4d78;color:#dbe9ff}
+.why-form{display:flex;gap:6px}.why-form input{flex:1;min-width:0}
+.why-answer em{margin-left:6px}.why-answer pre{font-size:10.5px;white-space:pre-wrap;max-height:180px;overflow:auto}
+.state-pill.refueling,.status-dot.refueling{background:#e7ba72}
+
+/* ── Smooth animation ── */
+.tractor-glyph{transform-box:view-box;transform-origin:0 0;will-change:transform}
+.tractor-glyph circle,.tractor-glyph rect{transition:fill .3s ease,stroke .3s ease}
+.fuel-bar>div,.progress-track>div,.battery-fill{transition:width .5s linear,background-color .3s ease}
+.status-dot,.mini-dot,.state-pill{transition:background-color .3s ease,color .3s ease}
+@media (prefers-reduced-motion:reduce){.tractor-glyph,.fuel-bar>div,.progress-track>div,.battery-fill{transition:none !important}}

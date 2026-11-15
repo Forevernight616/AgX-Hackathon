@@ -4,6 +4,18 @@ export async function agentHealth() {
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return response.json();
 }
+// Explainer Agent (LLM). Decisions are already made and safety-checked in the browser;
+// these calls only turn the facts into plain language. Callers keep the template text on failure.
+async function post(path, body, timeoutMs = 60000) {
+  const response = await fetch(`${BASE}${path}`, {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!response.ok) throw new Error(`Explainer HTTP ${response.status}`);
+  return response.json();
+}
+export const explainReplan = (diff, template) => post('/api/explain', {diff, template});
+export const askWhy = (question, facts, template) => post('/api/why', {question, facts, template});
+
 export async function deliberate(state, event = 'operator_review', jobId = null, includeAgronomy = false) {
   const response = await fetch(`${BASE}/api/agents/deliberate`, {
     method: 'POST', headers: {'Content-Type': 'application/json'},

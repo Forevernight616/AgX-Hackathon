@@ -124,7 +124,7 @@
       "name": "Atlas 02",
       "x": 4,
       "y": 5,
-      "fuel": 86,
+      "fuel": 52,
       "capabilities": [
         "mow",
         "spray"
@@ -224,13 +224,49 @@
       "priority": 1,
       "deadline": 116,
       "duration": 8
+    },
+    {
+      "id": "J9",
+      "fieldId": "F7",
+      "type": "spray",
+      "priority": 3,
+      "deadline": 85,
+      "duration": 9
+    },
+    {
+      "id": "J10",
+      "fieldId": "F5",
+      "type": "mow",
+      "priority": 2,
+      "deadline": 110,
+      "duration": 8
     }
   ],
   "events": [
     {
-      "time": 12,
+      "time": 8,
       "type": "breakdown",
       "tractorId": "T1"
     }
-  ]
+  ],
+  "agronomy": {
+    "maxSprayWind": 25,
+    "wind": [
+      {
+        "from": 0,
+        "to": 10,
+        "kmh": 34
+      }
+    ],
+    "wetFields": [
+      {
+        "fieldId": "F6",
+        "until": 45,
+        "types": [
+          "mow"
+        ],
+        "note": "standing water after irrigation"
+      }
+    ]
+  }
 }
