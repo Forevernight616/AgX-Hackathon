@@ -1,7 +1,8 @@
 // Simulator core: state, tick loop, events, FIFO baseline. Smart mode delegates every
 // decision to the agent layer in ./agents.js (Orchestrator → Fleet/Navigation/Safety/Agronomy).
 import source from '../data/scenario.json' with { type: 'json' };
-import {key, center, distance, compatibility, compatible, route, pathLength} from './nav.js';
+import {key, center, distance, compatibility, compatible, route, pathLength, nearestCorner} from './nav.js';
+import {coveragePlan, pointAt, verticesBetween} from './coverage.js';
 import {orchestrate, Safety, Agronomy, REFUEL_MINUTES} from './agents.js';
 export {compatible, route};
 
@@ -230,6 +231,27 @@ function fireEvents(s) {
   }
 }
 
+// Time-stamped breadcrumbs of every vertex a tractor passed, so the map can animate along roads/passes.
+function trail(s, t, p) {
+  (t.trail ||= []).push({x: p.x, y: p.y, time: s.time});
+  if (t.trail.length > 160) t.trail.splice(0, t.trail.length - 160);
+}
+// Coverage plan for a job (anchored at the corner the tractor entered from).
+function planFor(s, j, t) {
+  const f = s.fields.find(f => f.id === j.fieldId);
+  if (!f) return null;
+  if (j.anchor == null) j.anchor = nearestCorner(f, t);
+  return coveragePlan(f, j.type, j.anchor);
+}
+// Called when a tractor reaches its field. Returns true if it still has to drive to where work resumes.
+function arrive(s, t, j) {
+  const plan = planFor(s, j, t);
+  if (!plan) return false;
+  const p = pointAt(plan, j.progress);
+  if (distance(t, p) > 0.05) { t.path = [{x: p.x, y: p.y}]; return true; }
+  return false;
+}
+
 // Move a tractor along its path for one minute. Returns cells travelled.
 function move(s, t) {
   let budget = t.speed, spent = 0;
@@ -239,6 +261,7 @@ function move(s, t) {
     const m = Math.min(d, budget);
     t.x += (target.x - t.x) * m / d; t.y += (target.y - t.y) * m / d; budget -= m; spent += m;
     if (m >= d - 1e-8) { t.x = target.x; t.y = target.y; t.path.shift(); }
+    trail(s, t, t);
   }
   const elapsed = spent / t.speed;
   t.fuel = Math.max(0, t.fuel - spent * t.travelBurn); t.travel += elapsed; s.metrics.travel += elapsed;
@@ -268,10 +291,20 @@ export function tick(s) {
     if (!j) { t.status = 'idle'; continue; }
     if (t.status === 'traveling') {
       move(s, t);
-      if (!t.path.length) { t.status = 'working'; j.status = 'in_progress'; log(s, 'movement', `${t.name} arrived at ${j.fieldId}.`); }
+      if (!t.path.length && !arrive(s, t, j)) {
+        t.status = 'working'; j.status = 'in_progress';
+        const plan = planFor(s, j, t);
+        log(s, 'movement', `${t.name} arrived at ${j.fieldId}${plan ? `: ${plan.laps} headland lap${plan.laps > 1 ? 's' : ''} + ${plan.passes} passes, ${plan.swath.toFixed(2)}-cell swath` : ''}.`);
+      }
     } else if (t.status === 'working') {
-      const amount = Math.min(1 - j.progress, 1 / j.duration);
-      j.progress = Math.min(1, j.progress + amount); t.fuel = Math.max(0, t.fuel - amount * j.duration * t.workBurn); t.work += amount * j.duration;
+      const amount = Math.min(1 - j.progress, 1 / j.duration), before = j.progress;
+      j.progress = Math.min(1, j.progress + amount);
+      // Follow the coverage pattern: position is the point reached along the field's pass plan.
+      const plan = planFor(s, j, t);
+      if (plan) {
+        for (const v of verticesBetween(plan, before, j.progress)) trail(s, t, v);
+        const p = pointAt(plan, j.progress); t.x = p.x; t.y = p.y; trail(s, t, p);
+      } t.fuel = Math.max(0, t.fuel - amount * j.duration * t.workBurn); t.work += amount * j.duration;
       if (j.progress >= 1 - 1e-8) {
         j.progress = 1; j.status = 'done'; j.completedAt = s.time; t.jobId = null; t.status = 'idle'; t.reason = 'Available for next job';
         if (s.time <= j.deadline) {
