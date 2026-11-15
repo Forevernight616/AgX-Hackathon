@@ -99,11 +99,32 @@ function stageLabel(plan, frac) {
   if (i <= lapEnd) return `Headland lap ${Math.min(plan.laps, Math.max(1, Math.ceil((i - 1) / 5)))}/${plan.laps}`;
   return `Pass ${Math.min(plan.passes, Math.floor((i - lapEnd - 1) / 9) + 1)}/${plan.passes}`;
 }
+// Status line for a job that is not being worked right now, including the agents' rescue coordination.
+function rescueLabel(j) {
+  const p = props.sim.pledges?.[j.id];
+  if (p?.state === 'stranded') return 'stranded · needs repair';
+  if (p?.state === 'en route') return `${p.tractorId} coming to help`;
+  if (p?.state === 'pledged' && p.tractorId) return `paused · ${p.tractorId} pledged, on site ~t=${Math.round(p.arrive)}`;
+  if (j.status === 'assigned') return 'planned';
+  return 'paused · awaiting help';
+}
+// Dotted "help link" from a designated helper (still busy elsewhere) to the field it promised to finish.
+function helpLinks() {
+  const s = props.sim, out = [];
+  for (const [jobId, p] of Object.entries(s.pledges || {})) {
+    if (p.state !== 'pledged' || !p.tractorId) continue;
+    const t = s.tractors.find(t => t.id === p.tractorId), j = s.jobs.find(j => j.id === jobId), f = j && s.fields.find(f => f.id === j.fieldId);
+    if (!t || !f || j.status !== 'pending') continue;
+    const here = pose(t);
+    out.push({id: jobId, color: t.color, from: here, to: {x: f.x + (f.w - 1) / 2, y: f.y + (f.h - 1) / 2}});
+  }
+  return out;
+}
 function overlays() {
   const s = props.sim, out = [];
   for (const f of s.fields) {
     const jobs = s.jobs.filter(j => j.fieldId === f.id && j.status !== 'done');
-    const j = jobs.find(j => j.status === 'in_progress') || jobs.find(j => j.status === 'assigned') || jobs.find(j => j.progress > 0);
+    const j = jobs.find(j => j.status === 'in_progress') || jobs.find(j => j.status === 'assigned') || jobs.find(j => j.progress > 0 || s.pledges?.[j.id]);
     if (!j) continue;
     const t = s.tractors.find(t => t.id === j.tractorId);
     let corner = j.anchor;
@@ -116,10 +137,15 @@ function overlays() {
     out.push({
       f, j, plan, preview, color: t?.color || '#e9f1dc', style: TYPE_STYLE[j.type] || TYPE_STYLE.harvest,
       done: progress > 0 ? split.done : [], todo: split.todo, arrows, start: plan.points[0], end: plan.points.at(-1),
-      label: `${(TYPE_STYLE[j.type] || TYPE_STYLE.harvest).label} ${Math.round(j.progress * 100)}% · ${preview ? (j.status === 'assigned' ? 'planned' : 'paused') : stageLabel(plan, progress)}`,
+      label: `${(TYPE_STYLE[j.type] || TYPE_STYLE.harvest).label} ${Math.round(j.progress * 100)}% · ${preview ? rescueLabel(j) : stageLabel(plan, progress)}`,
+      rescue: !!s.pledges?.[j.id] && j.status !== 'in_progress',
     });
   }
   return out;
+}
+function finishedFields() {
+  const s = props.sim;
+  return s.fields.filter(f => { const jobs = s.jobs.filter(j => j.fieldId === f.id); return jobs.length && jobs.every(j => j.status === 'done'); });
 }
 const isSel = (kind, id) => props.selected.kind === kind && props.selected.id === id;
 function onBlockClick(e) {
@@ -182,8 +208,15 @@ const jobType = t => props.sim.jobs.find(j => j.id === t.jobId)?.type;
     <text v-if="f.h>1" :x="f.x*C+14" :y="f.y*C+42" class="field-sub">{{f.id}} · {{f.crop}}</text>
   </g>
   <g v-for="o in overlays()" :key="'badge'+o.j.id" class="coverage-badge">
-    <rect :x="o.f.x*C+8" :y="(o.f.y+o.f.h)*C-24" :width="Math.min(o.f.w*C-16, o.label.length*5.6+14)" height="16" rx="4" fill="#13221d" opacity=".82"/>
+    <rect :x="o.f.x*C+8" :y="(o.f.y+o.f.h)*C-24" :width="Math.min(o.f.w*C-16, o.label.length*5.6+14)" height="16" rx="4" fill="#13221d" opacity=".82" :stroke="o.rescue?'#f0a35e':'none'" stroke-width="1.2"/>
     <text :x="o.f.x*C+15" :y="(o.f.y+o.f.h)*C-12.5" class="coverage-text" :fill="o.style.cut">{{o.label}}</text>
+  </g>
+
+  <!-- Finished fields: every job on the field is done → big check mark -->
+  <g v-for="f in finishedFields()" :key="'done'+f.id" class="field-done" :transform="`translate(${(f.x+f.w/2)*C},${(f.y+f.h/2)*C}) scale(${Math.min(f.w,f.h*1.6,3)*0.42})`">
+    <circle r="42" fill="#13221d" opacity=".55"/>
+    <path d="M -24 2 L -8 18 L 26 -18" fill="none" stroke="#0f1d18" stroke-width="17" stroke-linecap="round" stroke-linejoin="round" opacity=".6"/>
+    <path d="M -24 2 L -8 18 L 26 -18" fill="none" stroke="#7ee0a1" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
   </g>
 
   <!-- Depot + obstacles -->
@@ -194,6 +227,12 @@ const jobType = t => props.sim.jobs.find(j => j.id === t.jobId)?.type;
   <g v-for="o in sim.obstacles" :key="`o${o.x},${o.y}`">
     <rect :x="o.x*C+5" :y="o.y*C+5" width="40" height="40" rx="5" fill="#853e3c" stroke="#f18c7c"/>
     <path :d="`M ${o.x*C+16} ${o.y*C+16} l 18 18 m 0 -18 l -18 18`" stroke="#ffd1ca" stroke-width="3"/>
+  </g>
+
+  <!-- Rescue pledges: helper (busy elsewhere) → field it promised to finish -->
+  <g v-for="h in helpLinks()" :key="'help'+h.id" class="help-link">
+    <line :x1="px(h.from.x)" :y1="px(h.from.y)" :x2="px(h.to.x)" :y2="px(h.to.y)" :stroke="h.color" stroke-width="2" stroke-dasharray="2 7" stroke-linecap="round" opacity=".75"/>
+    <circle :cx="px(h.to.x)" :cy="px(h.to.y)" r="9" fill="none" :stroke="h.color" stroke-width="2" opacity=".8"><animate attributeName="r" values="7;14;7" dur="1.6s" repeatCount="indefinite"/></circle>
   </g>
 
   <!-- Planned road routes -->
@@ -219,6 +258,8 @@ const jobType = t => props.sim.jobs.find(j => j.id === t.jobId)?.type;
 </template>
 
 <style scoped>
-.coverage, .coverage-badge, .farm-lane { pointer-events: none; }
+.coverage, .coverage-badge, .farm-lane, .field-done, .help-link { pointer-events: none; }
+.field-done { animation: pop-in .45s ease-out both; }
+@keyframes pop-in { from { opacity: 0; } to { opacity: 1; } }
 .coverage-text { font: 700 9.5px 'Space Grotesk', 'DM Sans', sans-serif; letter-spacing: .5px; }
 </style>

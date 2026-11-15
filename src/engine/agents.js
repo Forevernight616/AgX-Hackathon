@@ -14,6 +14,11 @@ export const FUEL_MARGIN = 2;     // % fuel kept on top of the trip back to the 
 export const REFUEL_MINUTES = 3;
 const MAX_ROUNDS = 6;             // propose/veto rounds before escalating to the operator
 const W_PRIORITY = 10, SOLE_BIDDER_REGRET = 30;
+// Rescue coordination: a job abandoned mid-field by a broken tractor is a *rescue job*. Its deadline becomes
+// soft (finishing late beats leaving a half-worked field), lateness is penalised in the bid cost, and rescue
+// jobs are auctioned before ordinary work so the designated helper goes there as soon as it is free.
+const RESCUE_BOOST = 60, LATE_WEIGHT = 1;
+export const isRescue = (s, j) => !!s.released?.[j.id];
 
 const r1 = x => Math.round(x * 10) / 10;
 const now = () => (globalThis.performance?.now?.() ?? Date.now());
@@ -75,7 +80,7 @@ export const Agronomy = {
 // ───────────────────────────── Fleet Agent ──────────────────────────────────
 export const Fleet = {
   // A tractor's bid for a job. {ok:true, cost, ...} or {ok:false, reason, category}.
-  bid(s, t, j, {ignoreBusy = false} = {}) {
+  bid(s, t, j, {ignoreBusy = false, allowLate = isRescue(s, j)} = {}) {
     const no = (reason, category = 'other') => ({ok: false, reason, category});
     if (t.status === 'broken') return no('broken down', 'broken');
     if (!ignoreBusy && !isFree(t)) return no(t.jobId ? `busy with ${t.jobId}` : t.task ? `on ${t.task} trip` : `status ${t.status}`, 'busy');
@@ -85,10 +90,49 @@ export const Fleet = {
     const work = remaining(j), required = leg.dist * t.travelBurn + work * t.workBurn;
     if (required > t.fuel + 1e-7) return no(`fuel ${r1(t.fuel)}% < ${r1(required)}% needed`, 'fuel');
     const finish = s.time + leg.travelTime + work;
-    if (finish > j.deadline + 1e-7) return no(`would finish t=${r1(finish)}, after deadline t=${j.deadline}`, 'deadline');
-    // Cost = minutes of travel (wasted time) + small weight on how long the job takes to complete.
-    const cost = leg.travelTime + 0.15 * (finish - s.time);
-    return {ok: true, tractorId: t.id, jobId: j.id, path: leg.path, dist: leg.dist, travelTime: leg.travelTime, finish, required, cost, detour: leg.detour};
+    const late = Math.max(0, finish - j.deadline);
+    if (late > 1e-7 && !allowLate) return no(`would finish t=${r1(finish)}, after deadline t=${j.deadline}`, 'deadline');
+    // Cost = minutes of travel (wasted time) + small weight on how long the job takes to complete (+ lateness for rescues).
+    const cost = leg.travelTime + 0.15 * (finish - s.time) + LATE_WEIGHT * late;
+    return {ok: true, tractorId: t.id, jobId: j.id, path: leg.path, dist: leg.dist, travelTime: leg.travelTime, finish, required, cost, detour: leg.detour, late};
+  },
+
+  // When could a (possibly busy) tractor be free, where, and with how much fuel?
+  availability(s, t) {
+    if (t.status === 'broken') return null;
+    if (t.task === 'refuel') {
+      const travel = pathLength(t, t.path || []) / t.speed;
+      return {at: s.time + travel + (t.status === 'refueling' ? t.refuelLeft : REFUEL_MINUTES), pos: {...s.station}, fuel: t.capacity, after: 'refuelling'};
+    }
+    if (!t.jobId) return {at: s.time, pos: {x: t.x, y: t.y}, fuel: t.fuel, after: null};
+    const j = s.jobs.find(j => j.id === t.jobId), f = j && fieldOf(s, j);
+    const dist = pathLength(t, t.path || []), work = j ? remaining(j) : 0;
+    return {at: s.time + dist / t.speed + work, pos: f ? center(f) : {x: t.x, y: t.y}, fuel: t.fuel - dist * t.travelBurn - work * t.workBurn, after: t.jobId};
+  },
+
+  // A tractor's answer to a HELP_REQUEST: commit to finishing a rescue job once it is free.
+  pledge(s, t, j) {
+    const no = reason => ({ok: false, tractorId: t.id, reason});
+    if (t.status === 'broken') return no('broken down');
+    if (!compatible(t, j)) return no(`no ${j.type} implement`);
+    const av = this.availability(s, t);
+    if (!av) return no('unavailable');
+    const ghost = {...t, x: av.pos.x, y: av.pos.y, fuel: av.fuel, status: 'idle', jobId: null, task: null, path: []};
+    const leg = Navigation.toJob(s, ghost, j);
+    if (!leg) return no('no open route to the field');
+    const need = leg.dist * t.travelBurn + remaining(j) * t.workBurn, reserve = Navigation.depotReserve(s, t, leg.dest);
+    // Not enough fuel: it would refuel first (depot round trip) — still a valid, slower pledge.
+    let start = av.at, viaDepot = false;
+    if (av.fuel < need + reserve) {
+      const toDepot = Navigation.leg(s, av.pos, s.station);
+      if (!toDepot) return no('cannot reach the depot to refuel');
+      const fromDepot = Navigation.toJob(s, {...ghost, x: s.station.x, y: s.station.y, fuel: t.capacity}, j);
+      if (!fromDepot) return no('no open route from the depot');
+      start += toDepot.dist / t.speed + REFUEL_MINUTES; viaDepot = true;
+      const finish = start + fromDepot.travelTime + remaining(j);
+      return {ok: true, tractorId: t.id, after: av.after, freeAt: av.at, arrive: start + fromDepot.travelTime, finish, viaDepot};
+    }
+    return {ok: true, tractorId: t.id, after: av.after, freeAt: av.at, arrive: start + leg.travelTime, finish: start + leg.travelTime + remaining(j), viaDepot};
   },
 
   // Propose a plan for all pending jobs using the currently free tractors.
@@ -128,7 +172,7 @@ export const Fleet = {
         if (!bids.length) continue;
         const regret = bids[1] ? bids[1].cost - bids[0].cost : SOLE_BIDDER_REGRET;
         const slack = j.deadline - bids[0].finish, urgency = Math.max(0, 20 - slack) * 0.5;
-        const score = W_PRIORITY * j.priority + regret + urgency;
+        const score = W_PRIORITY * j.priority + regret + urgency + (isRescue(s, j) ? RESCUE_BOOST : 0);
         if (!pick || score > pick.score + 1e-9 || (Math.abs(score - pick.score) < 1e-9 && j.id < pick.job.id))
           pick = {job: j, bid: bids[0], runnerUp: bids[1] || null, regret, score};
       }
@@ -185,7 +229,8 @@ export const Safety = {
         continue;
       }
       const start = s.time + leg.travelTime, finish = start + remaining(j);
-      if (finish > j.deadline + 1e-7) { veto('deadline', `${j.id} would finish t=${r1(finish)} after its deadline t=${j.deadline}`); continue; }
+      // Rescue jobs may finish late (a half-worked field is worse than a late one); everything else must be on time.
+      if (finish > j.deadline + 1e-7 && !isRescue(s, j)) { veto('deadline', `${j.id} would finish t=${r1(finish)} after its deadline t=${j.deadline}`); continue; }
       const ag = Agronomy.review(s, j, start, finish);
       if (ag) veto('agronomy', `Agronomy: ${ag}`);
     }
@@ -244,8 +289,71 @@ export function describeTrigger(s, tr) {
 }
 const ROUTINE = new Set(['JOB_DONE', 'REFUELED', 'AGRONOMY_WINDOW']);
 
+// ── Rescue coordination (HELP_REQUEST → PLEDGE/DECLINE → DESIGNATE → RESCUE → RESCUE_COMPLETE) ──
+// When a tractor breaks down mid-field, the Orchestrator asks every other tractor for help. Each one answers
+// with a pledge (when it could be free, arrive and finish, including a refuel stop if needed) or a decline.
+// Fleet designates the pledge with the earliest finish; the rescue job then goes first in every auction until
+// a helper is on its way. If the designated helper breaks down too, the round is repeated.
+const RESCUE_EVENTS = new Set(['BREAKDOWN', 'RELEASED', 'REPAIRED', 'ROUTE_BLOCKED', 'ROUTE_REOPENED', 'OPERATOR_EDIT']);
+function rescueRound(s, triggers, ctx) {
+  s.pledges ||= {};
+  const urgent = triggers.some(tr => RESCUE_EVENTS.has(tr.type));
+  for (const j of s.jobs) {
+    if (!isRescue(s, j) || j.status !== 'pending') continue;
+    const p = s.pledges[j.id], pledger = p?.tractorId && s.tractors.find(t => t.id === p.tractorId);
+    if (p && !urgent && (p.state === 'stranded' || (pledger && pledger.status !== 'broken'))) continue;
+    const r = s.released[j.id], f = fieldOf(s, j), pct = Math.round(j.progress * 100);
+    ctx.message(s, 'Orchestrator', 'Tractors', 'HELP_REQUEST', j.id,
+      `${r.tractorId} stopped in ${f?.name || j.fieldId} with ${pct}% done. Who can finish the remaining ${100 - pct}% (${r1(remaining(j))} min of ${j.type})?`);
+    const answers = s.tractors.filter(t => t.status !== 'broken').map(t => Fleet.pledge(s, t, j));
+    for (const a of answers) {
+      if (a.ok) ctx.message(s, a.tractorId, 'Fleet', 'PLEDGE', j.id,
+        `${a.after ? `after ${a.after} (free t=${r1(a.freeAt)})` : 'free now'}${a.viaDepot ? ', refuel first' : ''}: on site t=${r1(a.arrive)}, field done t=${r1(a.finish)}${a.finish > j.deadline ? ` (${r1(a.finish - j.deadline)} min past deadline)` : ''}`);
+      else ctx.message(s, a.tractorId, 'Fleet', 'DECLINE', j.id, a.reason);
+    }
+    const ok = answers.filter(a => a.ok).sort((a, b) => a.finish - b.finish || a.tractorId.localeCompare(b.tractorId));
+    if (!ok.length) {
+      s.pledges[j.id] = {state: 'stranded', from: r.tractorId, time: s.time};
+      ctx.message(s, 'Orchestrator', 'Operator', 'ESCALATE', j.id, `No tractor can finish ${j.id}: repair ${r.tractorId} or add a ${j.type}-capable tractor. ${pct}% progress is kept.`);
+      continue;
+    }
+    const best = ok[0];
+    s.pledges[j.id] = {tractorId: best.tractorId, from: r.tractorId, eta: best.finish, arrive: best.arrive, freeAt: best.freeAt, state: 'pledged', time: s.time};
+    ctx.message(s, 'Fleet', best.tractorId, 'DESIGNATE', j.id,
+      `${best.tractorId} will rescue ${j.id}: earliest finish t=${r1(best.finish)}${ok[1] ? ` (${r1(ok[1].finish - best.finish)} min ahead of ${ok[1].tractorId})` : ' (only capable helper)'}${best.after ? `, right after ${best.after}` : ', leaving now'}.`);
+    s.orchestratorMemory.push({time: s.time, kind: 'rescue_designated', jobId: j.id, tractorId: best.tractorId, from: r.tractorId});
+  }
+}
+function rescueFollowup(s, ctx) {
+  s.pledges ||= {};
+  for (const [jobId, p] of Object.entries(s.pledges)) {
+    const j = s.jobs.find(j => j.id === jobId);
+    if (!j) { delete s.pledges[jobId]; continue; }
+    if (j.status === 'done') {
+      if (p.state === 'en route') ctx.message(s, p.tractorId, 'Orchestrator', 'RESCUE_COMPLETE', jobId, `finished ${jobId} that ${p.from} left behind (t=${s.time}${s.time > j.deadline ? `, ${r1(s.time - j.deadline)} min late` : ', on time'})`);
+      delete s.pledges[jobId];
+    } else if (j.tractorId && p.state !== 'en route') {
+      const f = fieldOf(s, j);
+      Object.assign(p, {state: 'en route', tractorId: j.tractorId});
+      ctx.message(s, j.tractorId, 'Orchestrator', 'RESCUE', jobId, `heading to ${f?.name || j.fieldId} to finish the remaining ${Math.round((1 - j.progress) * 100)}% of ${jobId} for ${p.from}`);
+    } else if (!j.tractorId && p.state === 'en route') {
+      // The helper itself dropped the job (breakdown/blocked route): a new help round will run.
+      p.state = 'pledged'; p.tractorId = null;
+    }
+  }
+}
+
 // ctx = {message, assign, startRefuel, log} provided by the simulator core.
 export function orchestrate(s, triggers, ctx) {
+  for (const tr of triggers) if (tr.jobId && ['BREAKDOWN', 'RELEASED'].includes(tr.type)) s.released[tr.jobId] = {tractorId: tr.tractorId, progress: tr.progress, time: tr.time};
+  // The "rescue" check must also run on routine triggers: a JOB_DONE frees a pledged helper, and a finished rescue is reported.
+  rescueRound(s, triggers, ctx);
+  const exp = replan(s, triggers, ctx);
+  rescueFollowup(s, ctx);
+  return exp;
+}
+
+function replan(s, triggers, ctx) {
   const t0 = now();
   const pending = s.jobs.filter(j => j.status === 'pending'), free = s.tractors.filter(isFree);
   const label = triggers.map(tr => describeTrigger(s, tr)).join('; ');

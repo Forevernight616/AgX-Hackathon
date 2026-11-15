@@ -242,13 +242,7 @@
       "duration": 8
     }
   ],
-  "events": [
-    {
-      "time": 8,
-      "type": "breakdown",
-      "tractorId": "T1"
-    }
-  ],
+  "events": [],
   "agronomy": {
     "maxSprayWind": 25,
     "wind": [
