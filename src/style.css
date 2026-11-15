@@ -23,3 +23,13 @@
 .ai-results>div{border:1px solid #344c4b;background:#1c3032;border-radius:7px;padding:10px;font-size:12px}
 .ai-results strong{color:#9cd8cf}.ai-results p{line-height:1.5;margin:6px 0 0;white-space:pre-wrap}
 .ai-error{color:#f3a79e;margin-top:9px;font-size:12px}
+
+/* Live fuel gauge in the Scene Explorer tractor list. */
+.tree-row .tractor-tree-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tractor-battery{display:inline-flex;align-items:center;gap:5px;flex:none;color:#7fdfb4;font-size:10px;font-variant-numeric:tabular-nums;font-weight:700}
+.battery-shell{width:21px;height:11px;border:1.5px solid currentColor;border-radius:2.5px;padding:1.5px;position:relative;display:block;flex:none}
+.battery-shell::after{content:"";position:absolute;right:-4px;top:2.5px;width:2px;height:4px;border-radius:0 2px 2px 0;background:currentColor}
+.battery-fill{height:100%;display:block;border-radius:1px;background:currentColor;transition:width .2s ease}
+.battery-percentage{min-width:30px;text-align:right}
+.tractor-battery.medium{color:#e8bd70}
+.tractor-battery.low{color:#f08a7f}

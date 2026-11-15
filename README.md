@@ -79,3 +79,7 @@ See [TEAM_OLLAMA_SETUP.md](TEAM_OLLAMA_SETUP.md) for teammate-hosted Ollama, Fas
 
 ## Team Ollama handoff
 See [DUC_HANDOFF.md](DUC_HANDOFF.md). The backend defaults to `AI_MODE=mock` so the frontend can be tested without an LLM.
+
+### Scene Explorer fuel indicators
+
+Every tractor displays a live phone-style fuel battery and numeric percentage in the Scene Explorer. Green indicates >45%, amber indicates 21–45%, and red indicates 20% or less. The indicator follows simulation fuel consumption and refueling automatically.
