@@ -6,7 +6,7 @@ from collections import defaultdict
 import httpx
 
 OLLAMA_URL = os.getenv('OLLAMA_URL', 'http://127.0.0.1:11434').rstrip('/')
-MODEL = os.getenv('OLLAMA_MODEL', 'llama3.2')
+MODEL = os.getenv('OLLAMA_MODEL', 'qwen3.5:4b')
 MEMORY = defaultdict(list)
 
 

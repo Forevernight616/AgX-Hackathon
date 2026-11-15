@@ -1,14 +1,42 @@
 # FieldOps — Autonomous Farm Fleet Simulator
 
-A Vue 3 + Vite hackathon starter for **Run the Fleet**. Uses **our own simulation**, not AgOpenWeb. No Conda, Poetry, .NET, backend, or database is required to run this version.
+A Vue 3 + Vite hackathon project for **Run the Fleet**. Uses **our own simulation**, not AgOpenWeb (a single-tractor guidance app with no fleet, job, fuel or breakdown concepts; the brief allows a custom sim).
 
 ## Start
 
 ```bash
-cd fieldops
+# Terminal 1: frontend (simulator + all decision-making agents)
 npm install
-npm run dev
+npm run dev            # open http://localhost:5173
+
+# Terminal 2 (optional): Explainer Agent backend → local Ollama (qwen3.5:4b)
+cd backend
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+uvicorn main:app --host 127.0.0.1 --port 8000
 ```
+
+Without the backend everything still works; explanations use deterministic template sentences.
+
+## AI Farm Orchestrator (agent layer)
+
+> **The LLM talks to the farmer. Code makes decisions it can prove.**
+
+| Agent | File | Job |
+|---|---|---|
+| Orchestrator | `src/engine/agents.js` `orchestrate()` | Event-driven loop. Runs only on triggers (job list submitted, breakdown, repair, route blocked/reopened, priority change, job done, refuel done, agronomy window change). Fleet proposes → Safety reviews → commit plan vN+1 → diff → explanation. |
+| Fleet | `agents.js` `Fleet` | Tracks tractor status. Contract-net auction with **regret ordering** (biggest best-vs-second-best gap first, plus priority/urgency). Records every bid as "why?" facts. Inserts refuel trips when fuel is the only blocker. |
+| Navigation | `agents.js` `Navigation` (+ `nav.js`) | Routes, travel time, BFS detours around blocked cells, fuel reserve to return to the depot. |
+| Safety | `agents.js` `Safety` | `review(plan)` → `APPROVE` or `VETO(reason)` per assignment (implement, broken/busy, duplicate, DONE job, fuel + depot reserve, deadline, agronomy). Up to 6 propose/veto rounds, then escalate. `invariants()` runs after **every tick** in both modes. |
+| Agronomy | `agents.js` `Agronomy` | Field/crop rules from `scenario.json` → `agronomy`: no spraying above the wind limit, no mowing wet fields. Enforced by Safety. |
+| Explainer (LLM) | `backend/llm_agent.py` | Turns plan diffs and "why?" facts into plain English via Ollama. Never assigns work; falls back to the template text on any failure. |
+
+Every agent message (`REPLAN_REQUEST`, `CALL_FOR_PROPOSALS`, `PROPOSAL`, `PLAN_PROPOSED`, `VETO`, `REVISE`, `APPROVE`, `AWARD`, `HANDOFF`, `REFUEL`, `EXPLANATION`, ...) is shown in the dashboard feed and included in the exported event log, together with every plan version and explanation.
+
+**Breakdown recovery:** the broken tractor's job is released with progress kept (only the remaining work is re-auctioned), and the explanation states "X% kept, no work lost".
+
+**Metrics:** on-time completions; travel = tractor-minutes moving; idle = available tractor-minutes while any job is still open; agronomy breaches (baseline only, since it ignores the rules); invariant violations (must be 0).
 
 Open the local URL printed by Vite (usually `http://localhost:5173`). For a production build: `npm run build`.
 
@@ -79,3 +107,7 @@ See [TEAM_OLLAMA_SETUP.md](TEAM_OLLAMA_SETUP.md) for teammate-hosted Ollama, Fas
 
 ## Team Ollama handoff
 See [DUC_HANDOFF.md](DUC_HANDOFF.md). The backend defaults to `AI_MODE=mock` so the frontend can be tested without an LLM.
+
+### Scene Explorer fuel indicators
+
+Every tractor displays a live phone-style fuel battery and numeric percentage in the Scene Explorer. Green indicates >45%, amber indicates 21–45%, and red indicates 20% or less. The indicator follows simulation fuel consumption and refueling automatically.
